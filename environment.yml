@@ -4,6 +4,9 @@ channels:
   - defaults
 dependencies:
   - python=3.8  # Specify Python 3.8
+  - beautifulsoup4
+  - googletrans==4.0.0-rc1
+  - deep-translator
   - pip
   - pip:
       - streamlit==1.38.0
@@ -14,3 +17,6 @@ dependencies:
      # - snowflake.cortex==0.42.1
       - transformers==4.44.2
       # Add any additional pip packages here
+      - beautifulsoup4
+      - googletrans==4.0.0-rc1
+      - deep-translator

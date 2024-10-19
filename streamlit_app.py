@@ -4,7 +4,8 @@ from snowflake.core import Root  # Requires snowflake>=0.8.0
 from snowflake.cortex import Complete
 from snowflake.snowpark.context import get_active_session
 from snowflake.snowpark import Session
-
+from deep_translator import GoogleTranslator  # Translation library
+from bs4 import BeautifulSoup
 
 def load_svg(svg_filename):
     with open(svg_filename, "r") as file:
@@ -17,7 +18,9 @@ user_svg = load_svg("assets/user.svg")
 
 
 # Define the greeting message
-GREETING_MESSAGE = {"role": "assistant", "content": "Hello! Welcome to Informa AI. How can I assist you today?"}
+# Define the greeting message in English and Spanish
+GREETING_MESSAGE_EN = {"role": "assistant", "content": "Hello! Welcome to Informa AI. How can I assist you today?"}
+GREETING_MESSAGE_ES = {"role": "assistant", "content": "¡Hola! Bienvenido a Informa AI. ¿En qué puedo ayudarte hoy?"}
 
 # Import the fonts and inject custom CSS for assistant and user messages
 st.markdown(
@@ -35,8 +38,17 @@ st.markdown(
     footer {visibility: hidden;}
     header {visibility: hidden;}
     /* Optional: Customize background color */
-    .reportview-container {
-        background-color: white;
+     .reportview-container {
+        background-color: #F7F7F7;  /* Set background color */
+    }
+    .stTextInput, .st-emotion-cache-1f3w014 {
+        background-color: #F40000;  /* Input and button background */
+        color: #FFFFFF;  
+        border-radius: 70%;
+       padding-left: 4px;            /* Text color */
+    }
+    .stMainBlockContainer {
+      /*  background-color: #F7F7F7;  */
     }
     /* Assistant message container (aligned left) */
     .assistant-message-container {
@@ -64,7 +76,7 @@ st.markdown(
     .assistant-message {
         background: #FFFFFF 0% 0% no-repeat padding-box;
         box-shadow: -1px 1px 10px #E2E2E229;
-        border: 0.5px solid #EAEAEA;
+        border: 0.5px solid #dbd1d1;
         border-radius: 0px 10px 10px 10px;
         opacity: 1;
         padding: 10px;
@@ -122,6 +134,16 @@ st.markdown(
         background: #F40000 0% 0% no-repeat padding-box;
         opacity: 1;
     }
+     .stRadio{
+        border: 2px solid #d71c1c;  /* Green border */
+        padding: 10px;
+        border-radius: 8px;
+        margin-bottom: 15px;
+    }
+    .stRadio label {
+        font-weight: bold;
+        color: #eb1921;  /* Black text */
+    }
     </style>
     """,
     unsafe_allow_html=True
@@ -141,6 +163,8 @@ icons = {
 # Global variables to hold the Snowpark session and Root
 snowpark_session = None
 root = None
+user_language = None
+# question_translated = None
 
 def get_snowflake_session():
     # Access credentials from Streamlit secrets
@@ -175,28 +199,34 @@ MODELS = [
 
 def sanitize_chatbot_response(response):
     """
-    Remove any unmatched closing </div> tags or extra </div> tags from the chatbot's response.
-    This approach ensures that only valid HTML structure remains.
+    Use BeautifulSoup to parse and clean the HTML response, ensuring
+    that unmatched closing tags or extra tags are removed.
     """
-    # Use regex to find all </div> tags
-    div_close_tag_pattern = r"</div>"
-    
-    # Check if the number of opening and closing <div> tags is mismatched
-    opening_tags_count = response.count("<div>")
-    closing_tags_count = len(re.findall(div_close_tag_pattern, response))
-    
-    # If there are more closing tags than opening tags, remove the excess ones
-    if closing_tags_count > opening_tags_count:
-        # Remove extra closing </div> tags at the end
-        excess_tags = closing_tags_count - opening_tags_count
-        response = re.sub(f"(</div>\\s*){{{excess_tags}}}$", "", response)
-    
-    return response
+    try:
+        # Parse the response as HTML using BeautifulSoup
+        soup = BeautifulSoup(response, "html.parser")
+        
+        # Extract text content if needed, removing any excessive HTML tags
+        cleaned_response = soup.prettify()  # Optionally, can use soup.get_text() for plain text
+        
+        return cleaned_response
+    except Exception as e:
+        # If there's an error, return the raw response
+        return response
+
+# def sanitize_chatbot_response(response):
+#     """
+#     Remove unwanted HTML tags from the chatbot's response.
+#     In this case, we are specifically removing closing </div> tags.
+#     """
+#     # Use regex to remove any unwanted </div> tags at the end of the response
+#     cleaned_response = re.sub(r"</div>\s*$", "", response)
+#     return cleaned_response
 
 def init_session_state():
     """Initialize session state variables.""" 
     if 'messages' not in st.session_state:
-        st.session_state.messages = [GREETING_MESSAGE]
+        st.session_state.messages = [GREETING_MESSAGE_EN]
     if 'clear_conversation' not in st.session_state:
         st.session_state.clear_conversation = False
     if 'model_name' not in st.session_state:
@@ -209,8 +239,17 @@ def init_session_state():
 def init_messages():
     """Initialize the session state for chat messages.""" 
     if st.session_state.clear_conversation:
-        st.session_state.messages = [GREETING_MESSAGE]  # Reset to greeting message
+        st.session_state.messages = [GREETING_MESSAGE_EN]  # Reset to greeting message
         st.session_state.clear_conversation = False  # Reset the flag
+
+def translate_message(message, target_lang):
+    """Translate the message to the desired language using GoogleTranslator."""
+    try:
+        translator = GoogleTranslator(source='auto', target=target_lang)
+        return translator.translate(message)
+    except Exception as e:
+        st.error(f"Translation error: {e}")
+        return message  # Fallback to original message if translation fails
 
 def init_service_metadata():
     """Initialize cortex search service metadata.""" 
@@ -331,18 +370,54 @@ hide_streamlit_style = """
             header {visibility: hidden;}
             /* Optional: Customize background color */
             .reportview-container {
-                background-color: white;
+                background-color: grey;
             }
             </style>
             """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
 def main():
+    global user_language
+    question_translated = None
+
+    # Step 1: Language selection prompt
+    language_choice = st.radio("**Please choose your language / Por favor, elija su idioma!**", ("English", "Español"))
+
+
+  # Check if the language has changed or if this is the first time the user selects the language
+    if "user_language" not in st.session_state or (language_choice == "English" and st.session_state.user_language != "en") or (language_choice == "Español" and st.session_state.user_language != "es"):
+        
+        if language_choice == "English":
+            st.session_state.user_language = "en"
+            user_language = "en"
+            st.session_state.messages = [GREETING_MESSAGE_EN]  # Set English greeting message
+           # st.success("You have chosen English!")  # Show success alert
+        else:
+            st.session_state.user_language = "es"
+            user_language = "es"
+            st.session_state.messages = [GREETING_MESSAGE_ES]  # Set Spanish greeting message
+           # st.success("¡Has elegido Español!")  # Show success alert
+    else:
+        # Check if the first message is the English greeting to determine the language
+        if st.session_state.messages[0]["content"] == GREETING_MESSAGE_EN["content"]:
+            user_language = "en"
+        else:
+            user_language = "es"   
+
     # Initialize session state and other components
     init_session_state()
+
+    # Initialize greeting message based on selected language
+    if st.session_state.clear_conversation:
+        if user_language == "es":
+            st.session_state.messages = [GREETING_MESSAGE_ES]  # Reset to Spanish greeting message
+        else:
+            st.session_state.messages = [GREETING_MESSAGE_EN]  # Reset to English greeting message
+        st.session_state.clear_conversation = False
+
     init_service_metadata()
     init_messages()
-
+    
     # Display chat messages from history on app rerun
     for message in st.session_state.messages:
         if message["role"] == "assistant":
@@ -374,9 +449,18 @@ def main():
         "service_metadata" not in st.session_state
         or len(st.session_state.service_metadata) == 0
     )
+    
     if question := st.chat_input("Type your message here...", disabled=disable_chat):
+        # Initialize the question_translated variable with the default question value
+        question_translated = question
+
+        # If the user language is Spanish, translate the question to English
+        if user_language == "es":
+            question_translated = translate_message(question, "en")
+
         # Add user message to chat history
         st.session_state.messages.append({"role": "user", "content": question})
+
         # Display user message in chat message with styled rectangle
         with st.container():
             st.markdown(f"""
@@ -389,35 +473,38 @@ def main():
                 </div>
                 """, unsafe_allow_html=True)
 
-        # Check if service metadata is available
-        if "service_metadata" in st.session_state:
+        # Proceed to generate the answer if the question_translated is valid
+        if question_translated:
             try:
-             # Add a spinner while processing the response
-             with st.spinner("Thinking..."):
-                # Create a prompt for the language model
-                prompt, results = create_prompt(question)
-                # Get the response from the language model                
-                answer = complete(st.session_state.model_name, prompt)
-                # Sanitize the chatbot's response to remove any extra closing tags
-                cleaned_answer = sanitize_chatbot_response(answer)
-                # Add assistant's response to chat history
-                st.session_state.messages.append({"role": "assistant", "content": cleaned_answer})
+                with st.spinner("Thinking..."):
+                    # Create a prompt for the language model
+                    prompt, results = create_prompt(question_translated)
+                    # Get the response from the language model
+                    answer = complete(st.session_state.model_name, prompt)
+                    # Sanitize the chatbot's response to remove any extra closing tags
+                    cleaned_answer = sanitize_chatbot_response(answer)
 
-                # Display assistant's response in chat message with styled rectangle
-                with st.container():
-                    st.markdown(f"""
-                        <div class="assistant-message-container">
-                            <div class="assistant-header">
-                                <span class="assistant-icon">{icons.get("assistant", assistant_svg)}</span>
-                                <span class="assistant-name">Informa AI</span>
+                    # Translate back the response if the user language is Spanish
+                    if user_language == "es":
+                        cleaned_answer = translate_message(cleaned_answer, "es")
+
+                    # Add assistant's response to chat history
+                    st.session_state.messages.append({"role": "assistant", "content": cleaned_answer})
+
+                    # Display assistant's response in chat message with styled rectangle
+                    with st.container():
+                        st.markdown(f"""
+                            <div class="assistant-message-container">
+                                <div class="assistant-header">
+                                    <span class="assistant-icon">{icons.get("assistant", assistant_svg)}</span>
+                                    <span class="assistant-name">Informa AI</span>
+                                </div>
+                                <div class="assistant-message">{cleaned_answer}</div>
                             </div>
-                            <div class="assistant-message">{cleaned_answer}</div>
-                        </div>
-                        """, unsafe_allow_html=True)
+                            """, unsafe_allow_html=True)
             except Exception as e:
                 st.error(f"An error occurred while processing your request: {e}")
 
-# Execute the app
 if __name__ == "__main__":
     # Establish the Snowflake session
     get_snowflake_session()
