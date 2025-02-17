@@ -8,3 +8,5 @@ googletrans==4.0.0-rc1
 deep-translator
 # snowflake.cortex==0.42.1
 # Add other dependencies as needed
+spacy
+https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.0/en_core_web_sm-3.7.0-py3-none-any.whl
